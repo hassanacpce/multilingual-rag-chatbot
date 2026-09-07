@@ -1,0 +1,7 @@
+{
+  "sources": [],
+  "schedule": {
+    "enabled": false,
+    "interval_minutes": 60
+  }
+}

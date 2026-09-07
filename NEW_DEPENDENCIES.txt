@@ -1,0 +1,24 @@
+Add these to your requirements (on top of what you already have):
+
+    apscheduler          # background scheduling for periodic KB updates
+    beautifulsoup4        # required by WebBaseLoader for "url" sources
+    pypdf                  # required by PyPDFLoader for "pdf" sources
+    Pillow                 # image handling for the multimodal chat pipeline
+
+Install:
+    pip install apscheduler beautifulsoup4 pypdf Pillow
+
+Note: requirements.txt was also corrected -- it previously listed
+langchain-google-genai / google-generativeai, but langchain_helper.py
+actually imports langchain_groq and langchain_huggingface (Groq LLM +
+free local HuggingFace embeddings). It was also missing langchain-classic,
+which create_retrieval_chain / create_stuff_documents_chain come from.
+Those have been fixed in the updated requirements.txt.
+
+Environment variables (.env):
+    GROQ_API_KEY       -- required, used for both text and vision models
+    GROQ_TEXT_MODEL     -- optional override, defaults to openai/gpt-oss-120b
+                            (llama-3.3-70b-versatile was deprecated by Groq
+                            for free/dev-tier usage on 2026-06-17)
+    GROQ_VISION_MODEL   -- optional override, defaults to qwen/qwen3.6-27b
+                            (Groq's current multimodal preview model)
