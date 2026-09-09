@@ -38,6 +38,23 @@ vision_llm = ChatGroq(
     temperature=0,
 )
 
+# qwen/qwen3.6-27b is a hybrid "thinking mode" reasoning model (Groq's own
+# docs recommend reasoning_effort="none" for tasks that don't need deep
+# reasoning, vs. "default" for complex problem-solving). Structured
+# extraction and OCR are both "read what's there," not "reason about it" --
+# and unset reasoning defaults risk the same failure mode found and fixed in
+# reasoning_engine.py: a reasoning model can write its internal
+# chain-of-thought into response.content before the actual answer, which
+# for the JSON call specifically can consume the token budget before the
+# closing "}" is ever reached, breaking _safe_parse_json regardless of how
+# high max_tokens is set. reasoning_format="hidden" is kept as a second
+# layer of protection in case thinking mode still activates by default.
+# Also: neither call had a max_tokens cap before -- unbounded against a
+# 16k-token vision model ceiling is pure worst-case-latency risk with no
+# upside for either a compact JSON object or a single-image OCR pass.
+_vision_json_llm = vision_llm.bind(max_tokens=500, reasoning_format="hidden", reasoning_effort="none")
+_vision_ocr_llm = vision_llm.bind(max_tokens=2000, reasoning_format="hidden", reasoning_effort="none")
+
 _EXTRACTION_INSTRUCTIONS = """You are a visual evidence extractor for a customer service assistant.
 
 Look at the image and return ONLY a JSON object (no markdown fences, no prose
@@ -117,7 +134,7 @@ def _extract_raw_text(image_bytes: bytes, mime_type: str) -> str:
         ]
     )
     try:
-        response = vision_llm.invoke([message])
+        response = _vision_ocr_llm.invoke([message])
         text = response.content.strip()
         if text == "NO_TEXT_FOUND" or not text:
             return ""
@@ -157,7 +174,7 @@ def extract_image_evidence(image_bytes: bytes, mime_type: str = "image/png", use
     )
 
     try:
-        response = vision_llm.invoke([message])
+        response = _vision_json_llm.invoke([message])
         evidence = _safe_parse_json(response.content)
     except Exception as e:
         evidence = {

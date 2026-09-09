@@ -49,9 +49,37 @@ from langchain_helper import llm, vectordb_file_path
 from langchain_community.vectorstores import FAISS
 from langchain_helper import embeddings
 
+# Bounded, reasoning-tamed variants of the shared LLM. Two separate fixes
+# are bundled into these bindings:
+#
+# 1. max_tokens caps: nothing was capped originally, so any call could
+#    ramble indefinitely -- pure wasted latency.
+#
+# 2. reasoning_format="hidden": THE root cause of every intermittent
+#    "Validator response could not be parsed" failure seen in testing.
+#    `llm` is openai/gpt-oss-120b, a reasoning model -- ChatGroq defaults
+#    reasoning_format to "raw", which means the model's internal
+#    chain-of-thought gets written directly into response.content inside
+#    <think>...</think> tags, BEFORE the actual answer/JSON. For a "check
+#    every claim against the context" task that reasoning can run long and
+#    unpredictably, so it can consume the entire max_tokens budget before
+#    the model ever reaches the closing "}" of the JSON it was asked for --
+#    raising the cap alone doesn't fix this, since the reasoning simply eats
+#    whatever budget it's given. "hidden" lets the model still reason
+#    internally (quality is preserved) but stops that reasoning from being
+#    written into the visible completion at all, so the full token budget
+#    goes to the actual answer.
+#
+# reasoning_effort is lowered too: "low" for the small classification/
+# validation calls (mechanical tasks, don't need deep reasoning -- and
+# faster), "medium" for drafting where grounding care still matters after
+# the hallucination-pattern fixes above.
+_json_llm = llm.bind(max_tokens=600, reasoning_format="hidden", reasoning_effort="low")
+_draft_llm = llm.bind(max_tokens=1200, reasoning_format="hidden", reasoning_effort="medium")
+
 from vision_helper import extract_image_evidence, evidence_to_context_string
-from medquad_knowledge import get_medical_context
-from arxiv_knowledge import get_research_context
+from medquad_knowledge import get_medical_context, is_available as _medquad_available
+from arxiv_knowledge import get_research_context, is_available as _arxiv_available
 from sentiment_analysis import analyze_sentiment, get_tone_guidance
 from language_detection import detect_language, SUPPORTED_LANGUAGES
 
@@ -83,6 +111,18 @@ FALLBACK_MESSAGE_EMPATHETIC = {
     "hi": "असुविधा के लिए क्षमा करें — मुझे यह जानकारी अपने नॉलेज बेस में नहीं मिली। क्या आप अपना सवाल दोबारा बता सकते हैं, या मुझे मदद करने के लिए और विवरण दे सकते हैं?",
     "mr": "गैरसोयीबद्दल क्षमस्व — मला ही माहिती माझ्या नॉलेज बेसमध्ये सापडली नाही. कृपया तुमचा प्रश्न पुन्हा सांगा किंवा मदतीसाठी अधिक तपशील द्या.",
 }
+
+UNVERIFIED_CAVEAT = {
+    "en": "\n\n_Note: this answer is based on the reference material above, but one or more details in it couldn't be fully double-checked against that material — please verify anything important with a professional before relying on it._",
+    "es": "\n\n_Nota: esta respuesta se basa en el material de referencia anterior, pero uno o más detalles no pudieron verificarse por completo — confirme cualquier información importante con un profesional antes de basarse en ella._",
+    "fr": "\n\n_Remarque : cette réponse s'appuie sur les références ci-dessus, mais un ou plusieurs détails n'ont pas pu être entièrement vérifiés — merci de confirmer tout point important auprès d'un professionnel avant de vous y fier._",
+    "hi": "\n\n_नोट: यह उत्तर ऊपर दिए गए संदर्भ पर आधारित है, लेकिन इसमें मौजूद एक या अधिक विवरणों की पूरी तरह पुष्टि नहीं की जा सकी — किसी भी महत्वपूर्ण बात की पुष्टि किसी पेशेवर से करें।_",
+    "mr": "\n\n_टीप: हे उत्तर वरील संदर्भावर आधारित आहे, पण त्यातील एक किंवा अधिक तपशील पूर्णपणे पडताळता आले नाहीत — महत्त्वाची कोणतीही गोष्ट तज्ज्ञाकडून खात्री करून घ्या._",
+}
+
+
+def _unverified_caveat(language_code: str) -> str:
+    return UNVERIFIED_CAVEAT.get(language_code, UNVERIFIED_CAVEAT["en"])
 
 
 def _fallback_message(language_code: str, empathetic: bool) -> str:
@@ -147,7 +187,7 @@ def reload_vectordb():
 
 
 def _ask_llm_json(prompt: str) -> dict:
-    response = llm.invoke([HumanMessage(content=prompt)])
+    response = _json_llm.invoke([HumanMessage(content=prompt)])
     text = response.content.strip()
     if text.startswith("```"):
         text = text.strip("`")
@@ -186,6 +226,7 @@ def plan_response(
                 "Could you upload a clearer photo/screenshot, or describe in words what you'd like help with?"
             ),
             "english_query": question,
+            "domains": [],
             "reasoning": "Vision extraction confidence too low to use as evidence.",
         }
 
@@ -219,22 +260,70 @@ Classify this turn into exactly one response_type:
   {language_name}, matching the user's language.
 - "answerable": there's enough here to attempt a real answer.
 
+Also decide which knowledge source(s) are plausibly relevant to this
+question, as "domains": any of "company" (product/account/how-to questions
+about this business), "medical" (health/symptom/medication questions),
+"research" (computer-science research/paper questions). Include every domain
+that could plausibly help; when genuinely unsure, include more rather than
+fewer. Leave a domain out only when it's clearly irrelevant (e.g. a pure
+symptom question doesn't need "company" or "research"). This is purely a
+performance optimization to avoid searching irrelevant sources -- it must
+never cause you to miss something the question is actually about.
+
 Also provide english_query: an English translation of the user's underlying
 question/request, for internal knowledge-base search purposes only (the
 knowledge bases are English-only). If the user is already writing in
 English, just repeat the question as english_query.
 
 Respond with ONLY JSON:
-{{"response_type": "greeting"|"ambiguous"|"answerable", "needs_retrieval": true/false, "clarifying_question": "<empty string unless ambiguous, written in {language_name}>", "english_query": "<English translation of the question, for search>", "reasoning": "<one short sentence>"}}
+{{"response_type": "greeting"|"ambiguous"|"answerable", "needs_retrieval": true/false, "clarifying_question": "<empty string unless ambiguous, written in {language_name}>", "domains": ["company"|"medical"|"research", ...], "english_query": "<English translation of the question, for search>", "reasoning": "<one short sentence>"}}
 """
     result = _ask_llm_json(prompt)
+    domains = result.get("domains")
+    if not isinstance(domains, list) or not domains:
+        # Missing/invalid domains from a parse hiccup is exactly the case
+        # where being conservative matters -- fall back to searching
+        # everything rather than silently searching nothing.
+        domains = ["company", "medical", "research"]
+    else:
+        domains = [d for d in domains if d in ("company", "medical", "research")] or [
+            "company",
+            "medical",
+            "research",
+        ]
+
+    english_query = result.get("english_query") or question
+    translation_fallback_used = False
+
+    non_english = language_name.lower() != "english"
+    looks_untranslated = non_english and english_query.strip() == question.strip()
+    if looks_untranslated:
+        english_query = _translate_to_english(question, language_name) or english_query
+        translation_fallback_used = True
+
     return {
         "response_type": result.get("response_type", "answerable"),
         "needs_retrieval": bool(result.get("needs_retrieval", True)),
         "clarifying_question": result.get("clarifying_question", ""),
-        "english_query": result.get("english_query") or question,
+        "domains": domains,
+        "english_query": english_query,
         "reasoning": result.get("reasoning", ""),
+        "translation_fallback_used": translation_fallback_used,
     }
+
+
+def _translate_to_english(question: str, language_name: str) -> str:
+    prompt = f"""Translate the following {language_name} text into English.
+Output ONLY the English translation, nothing else -- no quotes, no preamble,
+no commentary.
+
+Text: {question}"""
+    try:
+        response = _json_llm.invoke([HumanMessage(content=prompt)])
+        translated = response.content.strip().strip('"')
+        return translated or question
+    except Exception:
+        return question
 
 
 # -----------------------------
@@ -251,16 +340,28 @@ def retrieve_company_context(query: str, evidence_block: str, k: int = 3) -> str
     return "\n\n".join(d.page_content for d in docs)
 
 
-def retrieve_context(english_query: str, evidence_block: str, k: int = 3) -> dict:
+def retrieve_context(english_query: str, evidence_block: str, domains: list, k: int = 3) -> dict:
     """
-    Pulls from THREE knowledge sources using the ENGLISH-translated query
-    (all three knowledge bases -- company, MedQuAD, arXiv -- are English-only
+    Pulls from the knowledge source(s) plan_response flagged as relevant to
+    this question (all three -- company, MedQuAD, arXiv -- are English-only
     TF-IDF/LSA indices; searching them with a non-English query would return
-    nothing, not just perform worse).
+    nothing, not just perform worse). Skipping an irrelevant domain isn't
+    just a minor local-compute saving -- it keeps irrelevant content out of
+    the draft/validate prompts entirely, which is both faster (smaller
+    prompts) and safer (the model no longer has to explicitly reason about
+    and dismiss a "Research papers" section on a pure symptom question, per
+    generate_draft rule 6 -- one less place for it to go off script).
     """
-    company_context = retrieve_company_context(english_query, evidence_block, k=k)
-    medical_context, entities, medical_available = get_medical_context(english_query, top_k=k)
-    research_context, papers, research_available = get_research_context(english_query, top_k=k)
+    company_context = ""
+    medical_context, entities, medical_available = "", [], _medquad_available()
+    research_context, papers, research_available = "", [], _arxiv_available()
+
+    if "company" in domains:
+        company_context = retrieve_company_context(english_query, evidence_block, k=k)
+    if "medical" in domains:
+        medical_context, entities, medical_available = get_medical_context(english_query, top_k=k)
+    if "research" in domains:
+        research_context, papers, research_available = get_research_context(english_query, top_k=k)
 
     blocks = []
     if company_context:
@@ -304,7 +405,23 @@ explain computer-science research topics using retrieved arXiv paper summaries.
 Rules:
 1. Answer ONLY using the knowledge base context and/or image evidence below.
 2. If the user is just greeting you or asking who you are, respond naturally without needing evidence.
-3. Never invent facts not present in the context or image evidence.
+3. Never invent facts not present in the context or image evidence. This
+   includes a specific pattern to watch for: if the context only gives a
+   general category (e.g. "pain relievers", "nasal decongestants"), do NOT
+   fill in real-world examples (e.g. "ibuprofen", "oxymetazoline") from your
+   own background knowledge -- stay at exactly the same level of generality
+   the context uses. The same applies to numbers: don't add specific
+   thresholds, durations, or dosages (e.g. "if fever exceeds 38°C for 2
+   days") unless that exact figure appears in the context.
+3a. "When to see a doctor" guidance is the single most common way this rule
+    gets broken -- resist the urge to add specific red-flag symptoms,
+    day-counts, or temperature thresholds for when to seek care UNLESS the
+    context states them verbatim. If you want to include this kind of
+    guidance at all and the context doesn't give specifics, use ONLY a fully
+    generic form with no numbers and no named symptoms, e.g. "if your
+    symptoms persist, worsen, or you're concerned, consult a healthcare
+    professional" -- translated naturally into {language_name}. That generic
+    form is always fine to include; a specific one is not, unless sourced.
 4. When you use a fact from the image, say so explicitly (e.g. "Based on the image you shared...").
 5. If the answer isn't supported by the context or image evidence, say so plainly (in {language_name}).
 6. The knowledge base context below may contain a "=== Company knowledge base ==="
@@ -326,7 +443,13 @@ Rules:
    their message mixed languages, respond primarily in {language_name} but
    you may naturally mirror a short phrase from the other language if it
    keeps the reply conversational. Keep any technical terms that don't
-   translate well in their original form.{tone_rule}
+   translate well in their original form.
+10. Be concise. Cover what the context actually supports in a few short
+    paragraphs or a short bullet list -- don't pad with a markdown table,
+    multiple headed sections, or a restated summary unless the context
+    genuinely has enough distinct, sourced content to justify that structure.
+    A shorter answer that's fully grounded beats a longer one that reaches
+    for structure it doesn't have content for.{tone_rule}
 
 Conversation so far:
 {history_block}
@@ -340,7 +463,7 @@ Image evidence:
 Question: {question}
 
 Answer:"""
-    response = llm.invoke([HumanMessage(content=prompt)])
+    response = _draft_llm.invoke([HumanMessage(content=prompt)])
     return response.content.strip()
 
 
@@ -363,9 +486,21 @@ A fact-checker reviewed it and found this problem:
 "{objection}"
 
 Rewrite the answer to fix that specific problem, using ONLY the knowledge base
-context and/or image evidence below. Keep responding in {language_name}. If,
-once you remove the unsupported part, nothing left is actually supported,
-say so plainly (in {language_name}).{tone_rule}
+context and/or image evidence below. Do not introduce any OTHER new specific
+detail that isn't already in the previous draft or the context while you're
+at it -- if you can't state something at the same level of generality the
+context uses (a category instead of a named example, no added numbers/
+thresholds), cut that part rather than replacing it with a different
+specific. Stay concise -- don't expand the answer's structure while fixing
+it; cutting an unsupported part should usually make the answer shorter, not
+trigger adding new sections to compensate. One pattern specifically: if the
+objection is about invented "when to see a doctor" specifics (thresholds,
+day-counts, named red-flag symptoms), don't just rephrase them -- either
+delete that guidance entirely or replace it with the fully generic form
+("if symptoms persist, worsen, or you're concerned, consult a healthcare
+professional") with no numbers or named symptoms at all. Keep responding in
+{language_name}. If, once you remove the unsupported part, nothing left is
+actually supported, say so plainly (in {language_name}).{tone_rule}
 
 Conversation so far:
 {history_block}
@@ -379,7 +514,7 @@ Image evidence:
 Question: {question}
 
 Revised answer:"""
-    response = llm.invoke([HumanMessage(content=prompt)])
+    response = _draft_llm.invoke([HumanMessage(content=prompt)])
     return response.content.strip()
 
 
@@ -412,17 +547,23 @@ Check every FACTUAL claim in the draft against the context/evidence above.
 Do NOT flag empathetic acknowledgments, apologies for inconvenience,
 greetings, or general tone/emotional framing sentences as unsupported --
 those are not factual claims and don't need to trace back to the context.
+Do NOT flag a fully generic "consult a healthcare professional if symptoms
+persist, worsen, or you're concerned" style line either (in any language) --
+that's standard prudent advice, not a factual claim, as long as it stays
+generic. DO flag it if it adds any specific number, duration, temperature,
+or named symptom not present in the context (e.g. a day-count, a temperature
+threshold, or a named red-flag symptom) -- that specific version needs
+grounding like any other factual claim.
 Only flag claims about the company, medical information, or research
 findings that aren't backed by the provided context.
 
 Respond with ONLY JSON:
-{{"supported": true/false, "final_answer": "<the answer to send if supported, otherwise leave as draft>", "objection": "<if not supported, describe SPECIFICALLY which factual claim is unsupported and why -- this will be used to ask for a rewrite; empty string if supported>"}}
+{{"supported": true/false, "objection": "<if not supported, describe SPECIFICALLY which factual claim is unsupported and why -- this will be used to ask for a rewrite; empty string if supported>"}}
 """
     result = _ask_llm_json(prompt)
     if not result or "supported" not in result:
         return {
             "supported": False,
-            "final_answer": draft_answer,
             "objection": "Validator response could not be parsed.",
         }
     return result
@@ -512,7 +653,7 @@ def answer(
             "trace": {"plan": plan, "sentiment": sentiment_info, "language": language_info, "kb_context": None, "attempts": []},
         }
 
-    retrieval = retrieve_context(plan["english_query"], evidence_block)
+    retrieval = retrieve_context(plan["english_query"], evidence_block, plan.get("domains") or ["company", "medical", "research"])
     kb_context = retrieval["combined"]
 
     draft = generate_draft(question, history_block, kb_context, evidence_block, language_name=language_name, tone_guidance=tone_guidance)
@@ -528,14 +669,24 @@ def answer(
         retries += 1
 
     if validation.get("supported"):
-        final_answer = validation.get("final_answer", draft)
+        final_answer = draft
         if retrieval["has_medical_content"]:
             final_answer += MEDICAL_DISCLAIMER
         if retrieval["has_research_content"]:
             paper_titles = ", ".join(f'"{p.title}"' for p in retrieval["research_papers"][:2])
             final_answer += f"\n\n_Source paper(s): {paper_titles} (arXiv)._"
+        used_unverified_fallback = False
+    elif kb_context.strip():
+        final_answer = draft + _unverified_caveat(language_code)
+        if retrieval["has_medical_content"]:
+            final_answer += MEDICAL_DISCLAIMER
+        if retrieval["has_research_content"]:
+            paper_titles = ", ".join(f'"{p.title}"' for p in retrieval["research_papers"][:2])
+            final_answer += f"\n\n_Source paper(s): {paper_titles} (arXiv)._"
+        used_unverified_fallback = True
     else:
         final_answer = _fallback_message(language_code, empathetic=sentiment.is_negative)
+        used_unverified_fallback = False
 
     memory.add("user", question, image_evidence)
     memory.add("assistant", final_answer)
@@ -553,6 +704,8 @@ def answer(
             "kb_context": kb_context,
             "attempts": attempts,
             "retries_used": retries,
+            "used_unverified_fallback": used_unverified_fallback,
+            "translation_fallback_used": plan.get("translation_fallback_used", False),
             "medical_entities": retrieval["medical_entities"],
             "medical_kb_available": retrieval["medical_kb_available"],
             "research_papers": [p.title for p in retrieval["research_papers"]],

@@ -51,6 +51,14 @@ SUPPORTED_LANGUAGES = {
 # falling back to conversation context is preferred over trusting the guess
 # (see eval_language_detection.py for the accuracy numbers behind this).
 SHORT_MESSAGE_WORD_THRESHOLD = 4
+# Mixed-detection uses a HIGHER minimum than whole-message detection: a
+# single short clause (e.g. "un mal de gorge") can hit high confidence for
+# the wrong language purely on shared function words between related
+# languages (verified: langdetect calls that exact French phrase Spanish at
+# 96% confidence in isolation). Per-clause detection has less context than
+# a whole message, so it needs a stricter floor to avoid manufacturing a
+# false "mixed" flag out of an ordinary single-language sentence.
+MIXED_DETECTION_MIN_CLAUSE_WORDS = 6
 # Below this confidence, same treatment even for longer messages.
 LOW_CONFIDENCE_THRESHOLD = 0.55
 
@@ -92,7 +100,7 @@ def _detect_mixed(text: str) -> Optional[List[str]]:
     to avoid.
     """
     clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(text) if c.strip()]
-    clauses = [c for c in clauses if len(c.split()) >= SHORT_MESSAGE_WORD_THRESHOLD]
+    clauses = [c for c in clauses if len(c.split()) >= MIXED_DETECTION_MIN_CLAUSE_WORDS]
     if len(clauses) < 2:
         return None
 

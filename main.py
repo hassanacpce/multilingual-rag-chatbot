@@ -11,24 +11,24 @@ from summarizer import summarize
 import feedback_log
 
 st.set_page_config(
-    page_title="Customer Service Chatbot",
-    page_icon="🤖",
+    page_title="Reference Assistant",
+    page_icon="📘",
     layout="wide",
 )
 
 SENTIMENT_STYLE = {
-    "strongly_negative": ("😠", "#C0392B"),
-    "negative": ("🙁", "#D9822B"),
-    "neutral": ("😐", "#8A8A8A"),
-    "positive": ("🙂", "#2E8B57"),
+    "strongly_negative": ("var(--warn)", "Strongly negative"),
+    "negative": ("var(--warn-soft)", "Negative"),
+    "neutral": ("var(--ink-soft)", "Neutral"),
+    "positive": ("var(--medical)", "Positive"),
 }
 
-LANGUAGE_STYLE = {
-    "en": ("🇬🇧", "#2C3E50"),
-    "hi": ("🇮🇳", "#FF9933"),
-    "mr": ("🇮🇳", "#B34700"),
-    "es": ("🇪🇸", "#C0392B"),
-    "fr": ("🇫🇷", "#2E4A9E"),
+LANGUAGE_NAMES = {
+    "en": "English",
+    "hi": "Hindi",
+    "mr": "Marathi",
+    "es": "Spanish",
+    "fr": "French",
 }
 
 # ------------------------
@@ -36,88 +36,224 @@ LANGUAGE_STYLE = {
 # ------------------------
 st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-.main{
-    background-color:#f4f7fb;
+:root{
+    --paper: #F2F4F3;
+    --panel: #FFFFFF;
+    --ink: #1C2624;
+    --ink-soft: #5B6B67;
+    --line: #D8DEDB;
+    --support: #35506B;
+    --medical: #3F7A5E;
+    --research: #A6752E;
+    --warn: #B5533C;
+    --warn-soft: #C98A5B;
 }
 
-.title{
-    text-align:center;
-    font-size:40px;
-    font-weight:bold;
-    color:#1f77ff;
+html, body, [class*="css"]{
+    font-family: 'IBM Plex Sans', sans-serif;
+    color: var(--ink);
 }
 
-.subtitle{
-    text-align:center;
-    color:gray;
-    margin-bottom:25px;
+.main, [data-testid="stAppViewContainer"]{
+    background-color: var(--paper);
 }
 
-.user{
-    background:#1f77ff;
-    color:white;
-    padding:12px;
-    border-radius:15px;
-    margin-top:10px;
+[data-testid="stSidebar"]{
+    background-color: var(--panel);
+    border-right: 1px solid var(--line);
 }
 
-.bot{
-    background:white;
-    color:black;
-    padding:12px;
-    border-radius:15px;
-    border-left:6px solid #1f77ff;
-    margin-bottom:20px;
-    box-shadow:0px 2px 10px rgba(0,0,0,0.08);
+h1, h2, h3, .app-title{
+    font-family: 'Source Serif 4', serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
 }
 
+/* Reduced-motion respect */
+@media (prefers-reduced-motion: reduce){
+    *{ animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+/* Visible keyboard focus, since we're overriding a lot of default chrome */
+button:focus-visible, input:focus-visible, textarea:focus-visible{
+    outline: 2px solid var(--support);
+    outline-offset: 2px;
+}
+
+/* ---- App header ---- */
+.app-header{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+}
+.app-title{
+    font-size: 1.6rem;
+    margin: 0;
+}
+.app-subtitle{
+    font-family: 'IBM Plex Sans', sans-serif;
+    color: var(--ink-soft);
+    font-size: 0.92rem;
+    margin-top: 4px;
+}
+
+/* ---- Sidebar section labels (sentence case, not all-caps) ---- */
+.panel-label{
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: var(--ink-soft);
+    margin: 18px 0 6px 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+.panel-label:first-of-type{ border-top: none; padding-top: 0; }
+
+.status-row{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.88rem;
+    padding: 3px 0;
+}
+.status-dot{
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    margin-right: 7px;
+}
+
+/* ---- Chat turns: no bubbles, no shadow-card kit -- typographic distinction + a thin domain rule ---- */
+.turn{
+    padding: 10px 0 10px 14px;
+    margin-bottom: 4px;
+    border-left: 3px solid var(--line);
+}
+.turn.user{
+    border-left-color: var(--ink-soft);
+}
+.turn.assistant{
+    border-left-color: var(--speaker-color, var(--support));
+    background: var(--panel);
+    padding: 14px 16px 14px 16px;
+    margin-bottom: 14px;
+    border-radius: 0 4px 4px 0;
+}
+.turn-meta{
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    margin-bottom: 4px;
+}
+.turn-meta b{ color: var(--ink); font-weight: 600; }
+
+.chip{
+    display: inline-block;
+    padding: 1px 9px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    margin-left: 6px;
+    color: var(--panel);
+}
+
+/* ---- Buttons: flat, quiet, one accent ---- */
 .stButton>button{
-    width:100%;
-    border-radius:10px;
-    height:45px;
-    font-size:17px;
+    width: 100%;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 0.92rem;
+    height: 42px;
+}
+.stButton>button:hover{
+    border-color: var(--support);
+    color: var(--support);
+}
+[data-testid="stFormSubmitButton"] button{
+    background: var(--support);
+    color: var(--panel);
+    border: none;
+}
+[data-testid="stFormSubmitButton"] button:hover{
+    background: var(--ink);
 }
 
-.sentiment-badge{
-    display:inline-block;
-    padding:2px 10px;
-    border-radius:999px;
-    color:white;
-    font-size:0.75rem;
-    font-weight:600;
-    margin-left:8px;
+/* ---- Tabs: plain text, underline for active state, no emoji chrome ---- */
+[data-testid="stTabs"] button[role="tab"]{
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 0.95rem;
+}
+[data-testid="stTabs"] button[aria-selected="true"]{
+    color: var(--support);
+    border-bottom-color: var(--support) !important;
 }
 
+/* ---- Research/paper cards: monospace only for genuine identifiers ---- */
+.paper-card{
+    background: var(--panel);
+    border-left: 3px solid var(--research);
+    border-radius: 0 4px 4px 0;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+}
+.paper-meta{
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.76rem;
+    color: var(--ink-soft);
+}
+.paper-title{
+    font-family: 'Source Serif 4', serif;
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 4px 0 6px 0;
+}
+.keyphrase-chip{
+    display: inline-block;
+    background: transparent;
+    border: 1px solid var(--research);
+    color: var(--research);
+    padding: 1px 9px;
+    border-radius: 3px;
+    font-size: 0.74rem;
+    margin: 2px 5px 2px 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
 
-def render_sentiment_badge(sentiment: dict) -> str:
-    if not sentiment:
-        return ""
-    emoji, color = SENTIMENT_STYLE.get(sentiment.get("label", "neutral"), ("😐", "#8A8A8A"))
-    label = sentiment.get("label", "neutral").replace("_", " ")
-    return (
-        f"<span class='sentiment-badge' style='background:{color}'>"
-        f"{emoji} {label} ({sentiment.get('compound', 0.0):+.2f})</span>"
-    )
+def render_meta_chips(sentiment: dict, language: dict) -> str:
+    chips = ""
+    if sentiment:
+        color, label = SENTIMENT_STYLE.get(sentiment.get("label", "neutral"), ("var(--ink-soft)", "Neutral"))
+        chips += f"<span class='chip' style='background:{color}'>{label} {sentiment.get('compound', 0.0):+.2f}</span>"
+    if language:
+        name = LANGUAGE_NAMES.get(language.get("code", "en"), language.get("name", "English"))
+        suffix = ""
+        if language.get("used_context_fallback"):
+            suffix = " · from context"
+        elif language.get("is_mixed"):
+            suffix = " · mixed"
+        chips += f"<span class='chip' style='background:var(--ink-soft)'>{name}{suffix}</span>"
+    return chips
 
 
-def render_language_badge(language: dict) -> str:
-    if not language:
-        return ""
-    flag, color = LANGUAGE_STYLE.get(language.get("code", "en"), ("🌐", "#555555"))
-    name = language.get("name", "English")
-    suffix = ""
-    if language.get("used_context_fallback"):
-        suffix = " · from context"
-    elif language.get("is_mixed"):
-        suffix = " · mixed"
-    return (
-        f"<span class='sentiment-badge' style='background:{color}'>"
-        f"{flag} {name}{suffix}</span>"
-    )
+def domain_for_trace(trace: dict) -> tuple:
+    """Picks the dominant source domain for a turn so the assistant panel's
+    accent rule reflects what the answer actually drew on, rather than
+    decorating every message identically."""
+    if not trace:
+        return ("support", "var(--support)")
+    if trace.get("medical_entities"):
+        return ("medical", "var(--medical)")
+    if trace.get("research_papers"):
+        return ("research", "var(--research)")
+    return ("support", "var(--support)")
 
 
 # ------------------------
@@ -126,134 +262,115 @@ def render_language_badge(language: dict) -> str:
 
 with st.sidebar:
 
-    st.title("⚙️ Control Panel")
+    st.markdown("<div class='panel-label' style='border-top:none;padding-top:0;'>Console</div>", unsafe_allow_html=True)
+    show_trace = st.toggle("Show reasoning trace", value=False)
 
-    if st.button(" Create Knowledge Base"):
+    st.markdown("<div class='panel-label'>Sources</div>", unsafe_allow_html=True)
 
-        with st.spinner("Creating Vector Database..."):
+    def _status_row(name: str, ready: bool, color: str) -> None:
+        dot_color = color if ready else "var(--warn)"
+        state = "ready" if ready else "not loaded"
+        st.markdown(
+            f"<div class='status-row'><span><span class='status-dot' style='background:{dot_color}'></span>{name}</span>"
+            f"<span style='color:var(--ink-soft)'>{state}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    _status_row("Company knowledge base", True, "var(--support)")
+    _status_row("Medical (MedQuAD)", medquad_knowledge.is_available(), "var(--medical)")
+    _status_row("Research (arXiv)", arxiv_knowledge.is_available(), "var(--research)")
+
+    if not medquad_knowledge.is_available():
+        err = medquad_knowledge.load_error()
+        st.caption(f"Medical KB: {err}" if err else "Medical KB not built yet.")
+    if not arxiv_knowledge.is_available():
+        err = arxiv_knowledge.load_error()
+        st.caption(f"Research KB: {err}" if err else "Research KB not built yet.")
+
+    st.markdown("<div class='panel-label'>Actions</div>", unsafe_allow_html=True)
+
+    if st.button("Rebuild company KB"):
+        with st.spinner("Rebuilding company knowledge base..."):
             create_vector_db()
             reload_vectordb()
+        st.success("Company knowledge base rebuilt.")
 
-        st.success("Knowledge Base Created Successfully!")
-
-    if st.button("🔄 Update Knowledge Base"):
-
-        with st.spinner("Pulling new content from configured sources..."):
+    if st.button("Pull updates from sources"):
+        with st.spinner("Checking configured sources for new content..."):
             summary = update_vector_store()
             reload_vectordb()
-
         if summary["total_added"] > 0:
-            st.success(f"Added {summary['total_added']} new chunk(s) to the knowledge base.")
+            st.success(f"Added {summary['total_added']} new item(s).")
         else:
-            st.info("No new content found — knowledge base is already up to date.")
-
+            st.caption("No new content found — already up to date.")
         for source_id, result in summary["sources"].items():
             if result["error"]:
                 st.error(f"{source_id}: {result['error']}")
 
-    if st.button("🗑 Clear Chat"):
+    if not medquad_knowledge.is_available():
+        if st.button("Build medical KB"):
+            with st.spinner("Parsing MedQuAD and building the medical index..."):
+                try:
+                    medquad_knowledge.force_rebuild()
+                    st.success("Medical knowledge base built.")
+                except Exception as e:
+                    st.error(f"Could not build medical KB: {e}")
+
+    if not arxiv_knowledge.is_available():
+        if st.button("Build research KB"):
+            with st.spinner("Parsing arXiv metadata and building the research index..."):
+                try:
+                    arxiv_knowledge.force_rebuild()
+                    st.success("Research knowledge base built.")
+                except Exception as e:
+                    st.error(f"Could not build research KB: {e}")
+
+    if st.button("Clear conversation"):
         st.session_state.messages = []
         st.session_state.memory = ConversationMemory()
 
-    show_trace = st.toggle("Show reasoning trace", value=False)
-
-    st.markdown("---")
-    st.subheader("🩺 Medical Knowledge Base")
-    if medquad_knowledge.is_available():
-        st.success("MedQuAD loaded — medical questions are answered from NIH/MedlinePlus data.")
-    else:
-        err = medquad_knowledge.load_error()
-        st.warning("MedQuAD not loaded. Medical questions will fall back to the company KB (likely 'not found').")
-        if err:
-            st.caption(f"Reason: {err}")
-        st.caption(
-            "Clone it first: `git clone https://github.com/abachaa/MedQuAD.git` "
-            "into `./MedQuAD` (or set `MEDQUAD_ROOT`), then click below."
-        )
-
-    if st.button("🔁 Build/Rebuild Medical KB"):
-        with st.spinner("Parsing MedQuAD XML and building the medical retrieval index..."):
-            try:
-                medquad_knowledge.force_rebuild()
-                st.success("Medical knowledge base built.")
-            except Exception as e:
-                st.error(f"Could not build medical KB: {e}")
-
-    st.markdown("---")
-    st.subheader("📄 Research Paper Knowledge Base (arXiv)")
-    if arxiv_knowledge.is_available():
-        st.success("arXiv papers loaded — research questions are answered with paper summaries + citations.")
-    else:
-        err = arxiv_knowledge.load_error()
-        st.warning("arXiv papers not loaded. Research questions will fall back to other knowledge sources.")
-        if err:
-            st.caption(f"Reason: {err}")
-        st.caption(
-            "Requires the Kaggle arXiv metadata file locally (needs a free Kaggle account): "
-            "`pip install kaggle && kaggle datasets download -d Cornell-University/arxiv && unzip arxiv.zip`, "
-            "then set `ARXIV_RAW_PATH` (or place `arxiv-metadata-oai-snapshot.json` here) and click below."
-        )
-
-    if st.button("🔁 Build/Rebuild Research KB"):
-        with st.spinner("Parsing arXiv metadata and building the paper retrieval index..."):
-            try:
-                arxiv_knowledge.force_rebuild()
-                st.success("Research knowledge base built.")
-            except Exception as e:
-                st.error(f"Could not build research KB: {e}")
-
-    st.markdown("---")
-    st.subheader("📊 Sentiment & Satisfaction")
+    st.markdown("<div class='panel-label'>Satisfaction</div>", unsafe_allow_html=True)
     stats = feedback_log.get_feedback_stats()
     if stats is None:
-        st.caption("No feedback logged yet. Use the 👍/👎 buttons under each answer to start tracking satisfaction.")
+        st.caption("No feedback yet — rate answers below to track this.")
     else:
-        st.metric("Overall satisfaction", f"{stats['overall_satisfaction_rate']*100:.0f}%", help=f"{stats['up']} up / {stats['down']} down out of {stats['total']} rated responses")
-        with st.expander("Breakdown by detected sentiment"):
+        st.metric("Rated positively", f"{stats['overall_satisfaction_rate']*100:.0f}%",
+                   help=f"{stats['up']} up / {stats['down']} down out of {stats['total']} rated")
+        with st.expander("By detected sentiment"):
             for label, counts in sorted(stats["by_sentiment"].items()):
-                emoji, _ = SENTIMENT_STYLE.get(label, ("😐", "#8A8A8A"))
-                st.write(f"{emoji} **{label.replace('_', ' ')}**: {counts['up']}/{counts['total']} = {counts['satisfaction_rate']*100:.0f}%")
+                st.write(f"**{label.replace('_', ' ')}** — {counts['up']}/{counts['total']} ({counts['satisfaction_rate']*100:.0f}%)")
 
-    st.markdown("---")
-
-    st.info("""
-This chatbot answers questions
-using your company knowledge base,
-general medical reference info (MedQuAD),
-computer-science research papers (arXiv),
-and any image you attach. It also detects
-sentiment and language, and adapts its
-tone and response language accordingly.
-
-Supports English, Hindi, Marathi, Spanish,
-and French — automatically, with context
-retained across language switches.
-
-Powered by
-
- LangChain
-
- FAISS
-
- Groq (text + vision)
-
- MedQuAD (NIH / MedlinePlus)
-
- arXiv (Cornell University)
-
- VADER (sentiment analysis)
-
- langdetect (language detection)
-""")
+    st.markdown("<div class='panel-label'>About</div>", unsafe_allow_html=True)
+    st.caption(
+        "Answers draw on the company knowledge base, MedQuAD medical reference "
+        "data, and arXiv research papers, plus any attached image. Detects "
+        "sentiment and adapts tone; supports English, Hindi, Marathi, Spanish, "
+        "and French with context retained across language switches."
+    )
+    st.caption("LangChain · FAISS · Groq · MedQuAD · arXiv · VADER · langdetect")
 
 # ------------------------
-# Title
+# Header
 # ------------------------
 
-st.markdown("<div class='title'> Customer Service Chatbot</div>", unsafe_allow_html=True)
+_sources_ready = sum([
+    True,  # company KB
+    medquad_knowledge.is_available(),
+    arxiv_knowledge.is_available(),
+])
 
 st.markdown(
-    "<div class='subtitle'>Ask about your account, general medical questions, or computer-science research \u2014 attach a screenshot or photo if it helps</div>",
+    f"""
+<div class="app-header">
+  <div>
+    <p class="app-title">Reference Assistant</p>
+    <p class="app-subtitle">Company support, medical reference, and research paper questions — in your language, with sources</p>
+  </div>
+  <div style="text-align:right; font-size:0.82rem; color:var(--ink-soft); white-space:nowrap;">
+    {_sources_ready}/3 sources connected
+  </div>
+</div>
+""",
     unsafe_allow_html=True,
 )
 
@@ -272,7 +389,7 @@ if "memory" not in st.session_state:
 if load_config().get("schedule", {}).get("enabled", False):
     start_scheduler()
 
-tab_chat, tab_search, tab_concepts = st.tabs(["\U0001f4ac Chat", "\U0001f50d Search Papers", "\U0001f5fa\ufe0f Concept Map"])
+tab_chat, tab_search, tab_concepts = st.tabs(["Chat", "Search papers", "Concept map"])
 
 # ------------------------
 # Tab 1: Chat (company + medical + research, unified, sentiment-aware)
@@ -282,18 +399,19 @@ with tab_chat:
     for idx, message in enumerate(st.session_state.messages):
 
         if message["role"] == "user":
-            sentiment_badge = render_sentiment_badge(message.get("sentiment"))
-            language_badge = render_language_badge(message.get("language"))
+            meta_chips = render_meta_chips(message.get("sentiment"), message.get("language"))
             st.markdown(
-                f"<div class='user'>\U0001f9d1 <b>You</b>{sentiment_badge}{language_badge}<br>{message['content']}</div>",
+                f"<div class='turn user'><div class='turn-meta'><b>You</b>{meta_chips}</div>{message['content']}</div>",
                 unsafe_allow_html=True,
             )
             if message.get("image"):
                 st.image(message["image"], width=220)
 
         else:
+            domain_label, domain_color = domain_for_trace(message.get("trace"))
             st.markdown(
-                f"<div class='bot'>\U0001f916 <b>Assistant</b><br>{message['content']}</div>",
+                f"<div class='turn assistant' style='--speaker-color:{domain_color}'>"
+                f"<div class='turn-meta'><b>Assistant</b> · {domain_label}</div>{message['content']}</div>",
                 unsafe_allow_html=True,
             )
 
@@ -329,23 +447,20 @@ with tab_chat:
                         message["feedback_logged"] = True
                         st.rerun()
             else:
-                st.caption("Thanks for the feedback!")
+                st.caption("Thanks for the feedback.")
 
             if show_trace and message.get("trace"):
                 entities = message["trace"].get("medical_entities") or []
                 if entities:
                     chips = " ".join(
-                        f"<span style='background:#4C8C6B;color:white;padding:2px 8px;"
-                        f"border-radius:999px;font-size:0.75rem;margin-right:4px;'>"
-                        f"{e['type']}: {e['text']}</span>"
+                        f"<span class='chip' style='background:var(--medical)'>{e['type']}: {e['text']}</span>"
                         for e in entities
                     )
                     st.markdown(f"**Medical entities detected:** {chips}", unsafe_allow_html=True)
                 papers = message["trace"].get("research_papers") or []
                 if papers:
                     paper_chips = " ".join(
-                        f"<span style='background:#7A3B2E;color:white;padding:2px 8px;"
-                        f"border-radius:999px;font-size:0.75rem;margin-right:4px;'>{p}</span>"
+                        f"<span class='chip' style='background:var(--research)'>{p}</span>"
                         for p in papers
                     )
                     st.markdown(f"**Papers referenced:** {paper_chips}", unsafe_allow_html=True)
@@ -404,10 +519,7 @@ with tab_chat:
 with tab_search:
     retriever = arxiv_knowledge.get_retriever()
     if retriever is None:
-        st.warning(
-            "Research knowledge base not loaded yet. Build it from the sidebar "
-            "(\U0001f4c4 Research Paper Knowledge Base) first."
-        )
+        st.warning("Research knowledge base not loaded yet. Build it from the sidebar first.")
     else:
         col_q, col_cat = st.columns([3, 1])
         with col_q:
@@ -426,20 +538,14 @@ with tab_search:
             for r in results:
                 summary = summarize(r.abstract, num_sentences=2)
                 phrases = [kp for kp, _ in extract_keyphrases(r.abstract, top_n=6)]
-                chips = "".join(
-                    f'<span style="display:inline-block;background:#E8A33D;color:#20293A;'
-                    f'padding:2px 9px;border-radius:3px;font-size:0.76rem;margin:2px 4px 2px 0;'
-                    f'font-weight:600;">{p}</span>'
-                    for p in phrases
-                )
+                chips = "".join(f"<span class='keyphrase-chip'>{p}</span>" for p in phrases)
                 st.markdown(
                     f"""
-<div style="background:white;border:1px solid #E3E3E3;border-left:4px solid #7A3B2E;
-border-radius:4px;padding:16px 20px;margin-bottom:14px;">
-  <div style="font-family:monospace;font-size:0.78rem;color:#6B6252;">{r.primary_category} \u00b7 match {r.score:.2f}</div>
-  <div style="font-size:1.05rem;font-weight:700;margin:4px 0 6px 0;">{r.title}</div>
-  <div style="font-family:monospace;font-size:0.78rem;color:#6B6252;margin-bottom:8px;">
-    {r.authors} \u00b7 <a href="{r.arxiv_url}" target="_blank">{r.arxiv_url}</a>
+<div class="paper-card">
+  <div class="paper-meta">{r.primary_category} · match {r.score:.2f}</div>
+  <div class="paper-title">{r.title}</div>
+  <div class="paper-meta" style="margin-bottom:8px;">
+    {r.authors} · <a href="{r.arxiv_url}" target="_blank" style="color:var(--research);">{r.arxiv_url}</a>
   </div>
   <p>{summary}</p>
   <div>{chips}</div>
@@ -456,10 +562,7 @@ border-radius:4px;padding:16px 20px;margin-bottom:14px;">
 with tab_concepts:
     retriever = arxiv_knowledge.get_retriever()
     if retriever is None:
-        st.warning(
-            "Research knowledge base not loaded yet. Build it from the sidebar "
-            "(\U0001f4c4 Research Paper Knowledge Base) first."
-        )
+        st.warning("Research knowledge base not loaded yet. Build it from the sidebar first.")
     else:
         import plotly.express as px
 
