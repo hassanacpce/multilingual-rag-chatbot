@@ -98,6 +98,18 @@ def _detect_mixed(text: str) -> Optional[List[str]]:
     genuinely mixed, else None. Short clauses are skipped -- they'd just
     reintroduce the same short-text unreliability this module is designed
     to avoid.
+
+    Only languages in SUPPORTED_LANGUAGES count as evidence of mixing.
+    Verified in testing: even a 6-word clause of plain English ("i have
+    fallen from my bike") can get misdetected as Norwegian at 99.99%
+    confidence by langdetect -- a confidence-based filter can't catch an
+    overconfident wrong answer. But this app only responds in 5 languages,
+    so a clause "detected" as Norwegian or Finnish is never actionable
+    signal regardless of how confident that reading is -- it's just noise.
+    Restricting to the supported set turns this specific, real failure mode
+    into a non-issue without weakening genuine mixed-language detection
+    (e.g. real Hindi/English code-switching still works, since both en
+    and hi are supported).
     """
     clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(text) if c.strip()]
     clauses = [c for c in clauses if len(c.split()) >= MIXED_DETECTION_MIN_CLAUSE_WORDS]
@@ -107,7 +119,7 @@ def _detect_mixed(text: str) -> Optional[List[str]]:
     found = set()
     for clause in clauses:
         raw = _detect_raw(clause)
-        if raw and raw[0][1] >= LOW_CONFIDENCE_THRESHOLD:
+        if raw and raw[0][1] >= LOW_CONFIDENCE_THRESHOLD and raw[0][0] in SUPPORTED_LANGUAGES:
             found.add(raw[0][0])
 
     return sorted(found) if len(found) > 1 else None

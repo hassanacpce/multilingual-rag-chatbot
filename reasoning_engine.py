@@ -262,13 +262,18 @@ Classify this turn into exactly one response_type:
 
 Also decide which knowledge source(s) are plausibly relevant to this
 question, as "domains": any of "company" (product/account/how-to questions
-about this business), "medical" (health/symptom/medication questions),
-"research" (computer-science research/paper questions). Include every domain
-that could plausibly help; when genuinely unsure, include more rather than
-fewer. Leave a domain out only when it's clearly irrelevant (e.g. a pure
-symptom question doesn't need "company" or "research"). This is purely a
-performance optimization to avoid searching irrelevant sources -- it must
-never cause you to miss something the question is actually about.
+about this business), "medical" (ANY health-related question -- illness
+symptoms, injuries, wounds, cuts, sprains, falls, medication, or anything a
+person might otherwise ask a doctor or nurse about, not only classic
+"symptom" language), "research" (computer-science research/paper
+questions). Include every domain that could plausibly help; when genuinely
+unsure, include more rather than fewer -- a question can need more than one
+domain, or none of them. Leave a domain out only when it's clearly
+irrelevant (e.g. a pure injury/symptom question doesn't need "company" or
+"research"). This is purely a performance optimization to avoid searching
+irrelevant sources -- it must never cause you to miss something the
+question is actually about, so when a question could plausibly be
+health-related at all, include "medical".
 
 Also provide english_query: an English translation of the user's underlying
 question/request, for internal knowledge-base search purposes only (the
