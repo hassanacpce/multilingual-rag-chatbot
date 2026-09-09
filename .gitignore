@@ -13,7 +13,6 @@ MedQuAD/
 multilingual_integration/
 
 # FAISS index (usually large/regenerable — remove this line if you want it tracked)
-faiss_index/
 medquad_index.joblib
 # OS junk
 .DS_Store
